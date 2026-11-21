@@ -70,8 +70,7 @@ struct MemoryGuard {
 }
 
 func memoryPressured() -> Bool {
-    var level: Int32 = 0, size = MemoryLayout<Int32>.size
-    return sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 && level >= 2
+    (memoryPressureLevel() ?? 0) >= 2
 }
 
 struct DiskGuard {

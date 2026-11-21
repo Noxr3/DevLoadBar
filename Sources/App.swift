@@ -51,6 +51,7 @@ import ServiceManagement
     }
     func enrollRepository() {
         let panel = NSOpenPanel()
+        panel.prompt = L("Choose")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         guard panel.runModal() == .OK, let path = panel.url?.path else { return }
@@ -100,6 +101,7 @@ import ServiceManagement
     func refresh() { load({ try Snapshot() }) { self.snapshot = $0 } }
     func chooseRepository() {
         let panel = NSOpenPanel()
+        panel.prompt = L("Choose")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         guard panel.runModal() == .OK, let path = panel.url?.path else { return }
@@ -133,10 +135,10 @@ import ServiceManagement
     func stop(_ c: Container) {
         guard let engine else { return }
         let alert = NSAlert()
-        alert.messageText = "Stop " + c.name + "?"
-        alert.informativeText = "Services in this local container will be interrupted. Docker removes containers created with --rm when they stop."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Stop container")
+        alert.messageText = L("Stop %@?", c.name)
+        alert.informativeText = L("Stopping interrupts this service. Docker deletes containers created with --rm.")
+        alert.addButton(withTitle: L("Cancel"))
+        alert.addButton(withTitle: L("Stop Container"))
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         load({
             _ = try engine.command(["stop", c.id])
@@ -145,185 +147,10 @@ import ServiceManagement
     }
 }
 
-struct Dashboard: View {
-    @ObservedObject var model: Model
-    @State private var tab = "Automation"
-    @State private var search = ""
-    @State private var sortCPU = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("DevLoadBar").font(.title2.bold())
-                Spacer()
-                if model.busy { ProgressView().controlSize(.small) }
-                Button("Refresh") { refresh() }
-            }
-            if let s = model.snapshot {
-                HStack(spacing: 20) {
-                    Label(model.power, systemImage: "bolt")
-                    Text(s.swap + " swap used")
-                    Text(s.disk + " disk free")
-                }.monospacedDigit()
-            }
-            Picker("View", selection: $tab) {
-                ForEach(["Automation", "Processes", "Disk", "Containers"], id: \.self) { Text($0) }
-            }.pickerStyle(.segmented).labelsHidden()
-            if !model.error.isEmpty { Text(model.error).foregroundStyle(.red).textSelection(.enabled) }
-            if tab == "Automation" { managementView }
-            if tab == "Processes" { processView }
-            if tab == "Disk" { diskView }
-            if tab == "Containers" { containerView }
-        }.disabled(model.busy).padding(20).frame(minWidth: 590, minHeight: 490)
-        .onAppear { model.refresh() }
-        .onChange(of: tab) { value in
-            if value == "Disk" && model.worktrees.isEmpty && !model.repo.isEmpty { model.list(model.repo) }
-        }
-    }
-    @ViewBuilder var managementView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 13) {
-                Toggle("Run background rules", isOn: $model.rules.enabled).font(.headline)
-                Text("Last check · " + model.lastCheck).font(.caption).foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 10) {
-                    Divider()
-                    Toggle("Limit memory of agent development workers", isOn: $model.rules.memory)
-                    Stepper("Per-process RSS limit · " + String(model.rules.limitGiB) + " GiB", value: $model.rules.limitGiB, in: 1...64)
-                    Stepper("Combined agent RSS under memory pressure · " + String(model.rules.groupGiB) + " GiB", value: $model.rules.groupGiB, in: 2...128)
-                    Toggle("Include Codex and Claude CLI sessions", isOn: $model.rules.includeAgentCLI).disabled(!model.rules.memory)
-                    Text("Three high samples send SIGTERM to one worker. Under system memory pressure the combined budget also applies. Active jobs may be interrupted.").font(.caption)
-                    Divider()
-                    Toggle("Stop managed containers after 5 minutes on battery", isOn: $model.rules.docker)
-                    Text("Enroll containers in the Containers tab, or use the Docker label devloadbar.stop-on-battery=true.").font(.caption)
-                    Divider()
-                    HStack {
-                        Text("Worktree cleanup").font(.headline)
-                        Spacer()
-                        Button("Choose repository…") { model.enrollRepository() }
-                    }
-                    if !model.rules.repository.isEmpty {
-                        Text(model.rules.repository).font(.caption).textSelection(.enabled)
-                    }
-                    Toggle("Automatically remove eligible worktrees", isOn: $model.rules.disk).disabled(model.rules.repository.isEmpty)
-                    Toggle("Also clear old ignored .next/cache and node_modules/.cache", isOn: $model.rules.trimCaches).disabled(!model.rules.disk)
-                    Text("On AC, when free space falls below 10% or 25 GiB, remove at most one clean, merged checkout per 15 minutes. Requires 7-day-old checkout metadata and no detected open files. Branches are retained.").font(.caption)
-                }.disabled(!model.rules.enabled)
-                Divider()
-                Button(model.loginEnabled ? "Disable launch at login" : "Launch at login") { model.toggleLogin() }
-                Text("Activity").font(.headline)
-                if model.audit.isEmpty { Text("No background actions recorded.").foregroundStyle(.secondary) }
-                ForEach(Array(model.audit.enumerated()), id: \.offset) { _, line in Text(line).font(.caption).textSelection(.enabled) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-    func refresh() {
-        if tab == "Containers" { model.listContainers() }
-        else if tab == "Disk" && !model.repo.isEmpty { model.list(model.repo) }
-        else { model.refresh() }
-    }
-    @ViewBuilder var processView: some View {
-        if let s = model.snapshot {
-            let groups = Dictionary(grouping: s.rows.filter { s.labels[$0.id] != nil }, by: { s.labels[$0.id]! })
-            ForEach(groups.keys.sorted(), id: \.self) { name in
-                let members = groups[name] ?? []
-                HStack {
-                    Text(name).bold()
-                    Text("\(members.count) processes").foregroundStyle(.secondary)
-                    Spacer()
-                    Text(gib(members.reduce(0) { $0 + $1.rss }) + " summed RSS")
-                }
-            }
-            HStack {
-                Text("Your processes").font(.headline)
-                Spacer()
-                Picker("Sort", selection: $sortCPU) {
-                    Text("Memory").tag(false)
-                    Text("CPU").tag(true)
-                }.fixedSize()
-            }
-            if !model.processDetail.isEmpty { Text(model.processDetail).font(.caption).textSelection(.enabled) }
-            List(sortCPU ? s.rows.sorted { $0.cpu > $1.cpu } : s.rows) { row in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(row.name).lineLimit(1)
-                        Text(["PID \(row.id)", s.labels[row.id]].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(String(format: "%.1f%% CPU", row.cpu))
-                    Text(gib(row.rss)).frame(width: 88, alignment: .trailing)
-                    Button("Locate") { model.locate(row) }
-                }.monospacedDigit().textSelection(.enabled)
-            }
-            Button("Open Activity Monitor") {
-                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
-            }
-        } else { Spacer() }
-    }
-    @ViewBuilder var diskView: some View {
-        HStack {
-            Text("Agent storage").font(.headline)
-            Spacer()
-            Menu("Measure folder") {
-                ForEach([".codex/sessions", ".codex/archived_sessions", ".codex/worktrees", ".claude/projects", ".claude/worktrees"], id: \.self) { dir in
-                    Button("~/" + dir) { model.inspect(NSHomeDirectory() + "/" + dir) }
-                }
-            }
-        }
-        ForEach(model.sizes.keys.sorted().filter { path in !model.worktrees.contains { $0.id == path } }, id: \.self) { path in
-            Text((path as NSString).abbreviatingWithTildeInPath + "   " + (model.sizes[path] ?? ""))
-        }
-        HStack {
-            Text("\(model.worktrees.count) registered worktrees").font(.headline)
-            Spacer()
-            Button("Choose repository…") { model.chooseRepository() }
-        }
-        if !model.repo.isEmpty { Text(model.repo).font(.caption).textSelection(.enabled) }
-        TextField("Filter by branch or path", text: $search)
-        List(model.worktrees.filter { search.isEmpty || ($0.id + $0.branch).localizedCaseInsensitiveContains(search) }) { tree in
-            HStack {
-                VStack(alignment: .leading) {
-                    Text([tree.branch, tree.flags, model.sizes[tree.id] ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                    Text(tree.id).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }.help(tree.id)
-                Spacer()
-                Button("Inspect") { model.inspect(tree.id, git: true) }
-                Button("Reveal") { NSWorkspace.shared.selectFile(tree.id, inFileViewerRootedAtPath: "") }
-            }
-        }
-    }
-    @ViewBuilder var containerView: some View {
-        if model.power == "Battery" {
-            Label("On battery · review running services", systemImage: "battery.50").foregroundStyle(.orange)
-        }
-        HStack {
-            Text(model.engine == nil ? "Local Docker engine" : "\(model.containers.count) running containers").font(.headline)
-            Spacer()
-            Button("Inspect local engine") { model.listContainers() }
-        }
-        if let engine = model.engine { Text(engine.socket).font(.caption).textSelection(.enabled) }
-        List(model.containers) { container in
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(container.name)
-                    Text(container.status).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let socket = model.engine?.socket {
-                    let enrolled = model.rules.containerIDs[socket] ?? []
-                    Button(enrolled.contains(container.id) ? "Unmanage" : "Manage on battery") {
-                        model.rules.containerIDs[socket] = enrolled.contains(container.id)
-                            ? enrolled.filter { $0 != container.id } : enrolled + [container.id]
-                    }
-                }
-                Button("Stop…") { model.stop(container) }
-            }
-        }
-    }
-}
-
 @MainActor final class Delegate: NSObject, NSApplicationDelegate {
     var item: NSStatusItem!
     var window: NSWindow!
+    let navigation = Navigation()
     let model = Model()
     var powerSource: CFRunLoopSource?
     func powerChanged() {
@@ -338,11 +165,17 @@ struct Dashboard: View {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "DevLoadBar")
         item.button?.toolTip = "DevLoadBar"
+        item.button?.target = self
+        item.button?.action = #selector(display)
         let menu = NSMenu()
-        let show = menu.addItem(withTitle: "Open DevLoadBar", action: #selector(display), keyEquivalent: "")
-        show.target = self
-        menu.addItem(withTitle: "Quit DevLoadBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.menu = menu
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: L("Settings…"), action: #selector(settings), keyEquivalent: ",").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: L("Quit DevLoadBar"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        menu.addItem(appItem)
+        NSApp.mainMenu = menu
         powerChanged()
         model.startManager()
         powerSource = IOPSNotificationCreateRunLoopSource({ pointer in
@@ -351,15 +184,28 @@ struct Dashboard: View {
             DispatchQueue.main.async { delegate.powerChanged() }
         }, Unmanaged.passUnretained(self).toOpaque())?.takeRetainedValue()
         if let powerSource { CFRunLoopAddSource(CFRunLoopGetMain(), powerSource, .commonModes) }
-        window = NSWindow(contentViewController: NSHostingController(rootView: Dashboard(model: model)))
+        window = NSWindow(contentViewController: NSHostingController(rootView: Dashboard(model: model, navigation: navigation)))
         window.title = "DevLoadBar"
         window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-        window.setContentSize(NSSize(width: 680, height: 575))
+        navigation.changed = { [weak self] page in self?.resize(for: page) }
+        window.contentMinSize = NSSize(width: 410, height: 280)
+        window.setContentSize(Page.overview.size)
         window.isReleasedWhenClosed = false
         window.center()
         display()
     }
+    func resize(for page: Page) {
+        window.contentMinSize = NSSize(width: page == .overview ? 410 : min(492, page.size.width), height: min(280, page.size.height))
+        window.title = page.title
+        let size = page.size
+        let old = window.frame
+        var next = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        next.origin = NSPoint(x: old.midX - next.width / 2, y: old.maxY - next.height)
+        window.setFrame(window.constrainFrameRect(next, to: window.screen), display: true)
+    }
+    @objc func settings() { display(); navigation.show(.settings) }
     @objc func display() {
+        navigation.show(.overview)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         if model.snapshot != nil { model.refresh() }

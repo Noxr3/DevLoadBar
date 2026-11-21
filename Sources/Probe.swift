@@ -121,7 +121,13 @@ struct Engine {
 }
 struct Container: Identifiable { let id: String, name: String, status: String }
 
+func memoryPressureLevel() -> Int32? {
+    var level: Int32 = 0, size = MemoryLayout<Int32>.size
+    return sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 ? level : nil
+}
+
 struct Snapshot {
+    let pressure = memoryPressureLevel()
     let rows: [ProcRow], labels: [Int32: String], disk: String, swap: String, power: String
     init() throws {
         rows = try processes()
