@@ -1,8 +1,65 @@
 import SwiftUI
 import AppKit
 import IOKit.ps
+import ServiceManagement
 
 @MainActor final class Model: ObservableObject {
+    @Published var rules: Rules = {
+        guard let data = UserDefaults.standard.data(forKey: "managementRules"),
+              let rules = try? JSONDecoder().decode(Rules.self, from: data) else { return Rules() }
+        return rules
+    }() {
+        didSet {
+            UserDefaults.standard.set(try? JSONEncoder().encode(rules), forKey: "managementRules")
+            policyTask?.cancel()
+        }
+    }
+    @Published var audit = UserDefaults.standard.stringArray(forKey: "managementAudit") ?? []
+    @Published var lastCheck = "Waiting for first check"
+    @Published var loginEnabled = SMAppService.mainApp.status == .enabled
+    let runner = PolicyRunner()
+    var policyTask: Task<Void, Never>?
+    var timer: Timer?
+
+    func startManager() {
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkRules() }
+        }
+        timer?.tolerance = 5
+        checkRules()
+    }
+    func checkRules() {
+        guard policyTask == nil else { return }
+        let policy = rules
+        policyTask = Task {
+            let events = await runner.tick(policy)
+            let stamp = Date().formatted(date: .abbreviated, time: .standard)
+            audit.insert(contentsOf: events.map { stamp + " · " + $0 }, at: 0)
+            audit = Array(audit.prefix(100))
+            if !events.isEmpty { UserDefaults.standard.set(audit, forKey: "managementAudit") }
+            lastCheck = stamp
+            policyTask = nil
+        }
+    }
+    func toggleLogin() {
+        do {
+            if loginEnabled { try SMAppService.mainApp.unregister() }
+            else { try SMAppService.mainApp.register() }
+            loginEnabled = SMAppService.mainApp.status == .enabled
+            if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        } catch { self.error = error.localizedDescription }
+    }
+    func enrollRepository() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let path = panel.url?.path else { return }
+        load({ try trees(path).first?.id }) { primary in
+            guard let primary else { self.error = "Choose a Git checkout"; return }
+            self.rules.disk = false
+            self.rules.repository = primary
+        }
+    }
     @Published var snapshot: Snapshot?
     @Published var power = "Checking power…"
     @Published var processDetail = ""
@@ -77,7 +134,7 @@ import IOKit.ps
         guard let engine else { return }
         let alert = NSAlert()
         alert.messageText = "Stop " + c.name + "?"
-        alert.informativeText = "Services in this local container will be interrupted. Its files and volumes will be kept."
+        alert.informativeText = "Services in this local container will be interrupted. Docker removes containers created with --rm when they stop."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Stop container")
         guard alert.runModal() == .alertSecondButtonReturn else { return }
@@ -90,7 +147,7 @@ import IOKit.ps
 
 struct Dashboard: View {
     @ObservedObject var model: Model
-    @State private var tab = "Processes"
+    @State private var tab = "Automation"
     @State private var search = ""
     @State private var sortCPU = false
 
@@ -110,9 +167,10 @@ struct Dashboard: View {
                 }.monospacedDigit()
             }
             Picker("View", selection: $tab) {
-                ForEach(["Processes", "Disk", "Containers"], id: \.self) { Text($0) }
+                ForEach(["Automation", "Processes", "Disk", "Containers"], id: \.self) { Text($0) }
             }.pickerStyle(.segmented).labelsHidden()
             if !model.error.isEmpty { Text(model.error).foregroundStyle(.red).textSelection(.enabled) }
+            if tab == "Automation" { managementView }
             if tab == "Processes" { processView }
             if tab == "Disk" { diskView }
             if tab == "Containers" { containerView }
@@ -120,6 +178,42 @@ struct Dashboard: View {
         .onAppear { model.refresh() }
         .onChange(of: tab) { value in
             if value == "Disk" && model.worktrees.isEmpty && !model.repo.isEmpty { model.list(model.repo) }
+        }
+    }
+    @ViewBuilder var managementView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 13) {
+                Toggle("Run background rules", isOn: $model.rules.enabled).font(.headline)
+                Text("Last check · " + model.lastCheck).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Divider()
+                    Toggle("Limit memory of agent development workers", isOn: $model.rules.memory)
+                    Stepper("Per-process RSS limit · " + String(model.rules.limitGiB) + " GiB", value: $model.rules.limitGiB, in: 1...64)
+                    Stepper("Combined agent RSS under memory pressure · " + String(model.rules.groupGiB) + " GiB", value: $model.rules.groupGiB, in: 2...128)
+                    Toggle("Include Codex and Claude CLI sessions", isOn: $model.rules.includeAgentCLI).disabled(!model.rules.memory)
+                    Text("Three high samples send SIGTERM to one worker. Under system memory pressure the combined budget also applies. Active jobs may be interrupted.").font(.caption)
+                    Divider()
+                    Toggle("Stop managed containers after 5 minutes on battery", isOn: $model.rules.docker)
+                    Text("Enroll containers in the Containers tab, or use the Docker label devloadbar.stop-on-battery=true.").font(.caption)
+                    Divider()
+                    HStack {
+                        Text("Worktree cleanup").font(.headline)
+                        Spacer()
+                        Button("Choose repository…") { model.enrollRepository() }
+                    }
+                    if !model.rules.repository.isEmpty {
+                        Text(model.rules.repository).font(.caption).textSelection(.enabled)
+                    }
+                    Toggle("Automatically remove eligible worktrees", isOn: $model.rules.disk).disabled(model.rules.repository.isEmpty)
+                    Toggle("Also clear old ignored .next/cache and node_modules/.cache", isOn: $model.rules.trimCaches).disabled(!model.rules.disk)
+                    Text("On AC, when free space falls below 10% or 25 GiB, remove at most one clean, merged checkout per 15 minutes. Requires 7-day-old checkout metadata and no detected open files. Branches are retained.").font(.caption)
+                }.disabled(!model.rules.enabled)
+                Divider()
+                Button(model.loginEnabled ? "Disable launch at login" : "Launch at login") { model.toggleLogin() }
+                Text("Activity").font(.headline)
+                if model.audit.isEmpty { Text("No background actions recorded.").foregroundStyle(.secondary) }
+                ForEach(Array(model.audit.enumerated()), id: \.offset) { _, line in Text(line).font(.caption).textSelection(.enabled) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
     func refresh() {
@@ -214,6 +308,13 @@ struct Dashboard: View {
                     Text(container.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let socket = model.engine?.socket {
+                    let enrolled = model.rules.containerIDs[socket] ?? []
+                    Button(enrolled.contains(container.id) ? "Unmanage" : "Manage on battery") {
+                        model.rules.containerIDs[socket] = enrolled.contains(container.id)
+                            ? enrolled.filter { $0 != container.id } : enrolled + [container.id]
+                    }
+                }
                 Button("Stop…") { model.stop(container) }
             }
         }
@@ -226,7 +327,9 @@ struct Dashboard: View {
     let model = Model()
     var powerSource: CFRunLoopSource?
     func powerChanged() {
+        let oldSource = model.power
         model.updatePower()
+        if oldSource != model.power { Task { await model.runner.resetBatteryGrace() } }
         item.button?.toolTip = "DevLoadBar · " + model.power
         let symbol = model.power == "Battery" ? "battery.50" : "gauge.with.dots.needle.67percent"
         item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "DevLoadBar")
@@ -241,6 +344,7 @@ struct Dashboard: View {
         menu.addItem(withTitle: "Quit DevLoadBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         powerChanged()
+        model.startManager()
         powerSource = IOPSNotificationCreateRunLoopSource({ pointer in
             guard let pointer else { return }
             let delegate = Unmanaged<Delegate>.fromOpaque(pointer).takeUnretainedValue()
