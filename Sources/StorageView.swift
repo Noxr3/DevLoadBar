@@ -51,7 +51,7 @@ struct StorageView: View {
             HStack {
                 if inventory.running {
                     ProgressView().controlSize(.small)
-                    Text(L("Measured %d of %d folders", inventory.entries.count, inventory.count))
+                    Text(inventory.count == 0 ? L("Finding folders…") : L("Measured %d of %d folders", inventory.entries.count, inventory.count))
                 } else {
                     Text(L("%d folders", inventory.entries.count))
                 }

@@ -80,15 +80,23 @@ struct HarnessStorage {
 
         // Probe repository markers in common project locations; Git supplies linked checkout paths.
         var projects = Set(repositories.filter { !$0.isEmpty })
-        for folder in ["", "Developer", "Projects", "src", "code", "repos", "Documents", "Documents/ChatGPT", "Documents/GitHub"] {
+        let protectedHomes = ["Documents", "Desktop", "Downloads", "Pictures", "Music", "Movies", "Library", "Public"]
+        func protected(_ path: String) -> Bool {
+            protectedHomes.contains { name in
+                let base = home.appendingPathComponent(name).path
+                return path == base || path.hasPrefix(base + "/")
+            }
+        }
+        for folder in ["", "Developer", "Projects", "src", "code", "repos"] {
             let parent = home.appendingPathComponent(folder)
             guard let entries = try? fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
-            for entry in entries where fm.fileExists(atPath: entry.path + "/.git") { projects.insert(entry.path) }
+            for entry in entries where !protected(entry.path) && fm.fileExists(atPath: entry.path + "/.git") { projects.insert(entry.path) }
         }
         var seen = Set<String>()
         for repo in projects.sorted() where !seen.contains(repo) {
             let checkouts = (try? trees(repo).map(\.id)) ?? [repo]
             for checkout in checkouts where seen.insert(checkout).inserted {
+                if protected(checkout) && !repositories.contains(checkout) { continue }
                 for (tool, marker) in markers { add(tool, checkout + "/" + marker, "Project data") }
             }
         }
