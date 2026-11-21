@@ -57,18 +57,6 @@ struct Inspector: View {
     }
     @ViewBuilder var diskView: some View {
         HStack {
-            Text("Agent storage").font(.headline)
-            Spacer()
-            Menu("Measure folder") {
-                ForEach([".codex/sessions", ".codex/archived_sessions", ".codex/worktrees", ".claude/projects", ".claude/worktrees"], id: \.self) { dir in
-                    Button("~/" + dir) { model.inspect(NSHomeDirectory() + "/" + dir) }
-                }
-            }
-        }
-        ForEach(model.sizes.keys.sorted().filter { path in !model.worktrees.contains { $0.id == path } }, id: \.self) { path in
-            Text((path as NSString).abbreviatingWithTildeInPath + "   " + (model.sizes[path] ?? ""))
-        }
-        HStack {
             Text(L("%d worktrees", model.worktrees.count)).font(.headline)
             Spacer()
             Button("Choose repository…") { model.chooseRepository() }

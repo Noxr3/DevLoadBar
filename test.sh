@@ -6,3 +6,5 @@ xcrun swiftc Sources/Probe.swift Tests/ProbeTests.swift -o .build/probe-tests
 .build/probe-tests
 xcrun swiftc Sources/Probe.swift Sources/Policies.swift Tests/PolicyTests.swift -o .build/policy-tests
 .build/policy-tests
+xcrun swiftc Sources/Probe.swift Sources/HarnessStorage.swift Tests/StorageTests.swift -o .build/storage-tests
+.build/storage-tests

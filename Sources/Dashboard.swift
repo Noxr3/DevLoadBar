@@ -7,10 +7,11 @@ func L(_ key: String, _ arguments: CVarArg...) -> String {
 }
 
 enum Page {
-    case overview, disk, memory, battery, activity, settings, processes, worktrees, containers
+    case overview, storage, disk, memory, battery, activity, settings, processes, worktrees, containers
 
     var title: String {
         switch self {
+        case .storage: return L("Agent storage")
         case .overview: return "DevLoadBar"
         case .disk: return L("Disk")
         case .memory: return L("Memory")
@@ -25,7 +26,7 @@ enum Page {
     var parent: Page {
         switch self {
         case .processes: return .memory
-        case .worktrees: return .disk
+        case .storage, .worktrees: return .disk
         case .containers: return .battery
         default: return .overview
         }
@@ -33,7 +34,7 @@ enum Page {
     var size: NSSize {
         switch self {
         case .overview: return NSSize(width: 440, height: 284)
-        case .processes, .worktrees, .containers: return NSSize(width: 660, height: 510)
+        case .storage, .processes, .worktrees, .containers: return NSSize(width: 660, height: 510)
         case .settings: return NSSize(width: 440, height: 230)
         default: return NSSize(width: 492, height: 404)
         }
@@ -66,7 +67,7 @@ struct Dashboard: View {
                         Label(L("Back"), systemImage: "chevron.backward")
                     }.keyboardShortcut("[", modifiers: .command)
                     Spacer()
-                    if [.processes, .worktrees, .containers].contains(navigation.page) {
+                    if [.storage, .processes, .worktrees, .containers].contains(navigation.page) {
                         Button { refreshInspector() } label: {
                             Label(L("Refresh"), systemImage: "arrow.clockwise")
                         }.disabled(model.busy).keyboardShortcut("r")
@@ -100,6 +101,7 @@ struct Dashboard: View {
     func refreshInspector() {
         guard !model.busy else { waitingToRefresh = true; return }
         switch navigation.page {
+        case .storage: model.inventory.scan(repositories: model.scanRepositories, force: true)
         case .containers: model.listContainers()
         case .worktrees:
             let path = model.repo.isEmpty ? model.rules.repository : model.repo
@@ -180,6 +182,9 @@ struct Dashboard: View {
         switch navigation.page {
         case .processes, .worktrees, .containers:
             Inspector(model: model, page: navigation.page)
+        case .storage:
+            StorageView(inventory: model.inventory, repositories: model.scanRepositories)
+                .onAppear { model.inventory.scan(repositories: model.scanRepositories) }
         case .activity:
             Text(L("Last check · %@", model.lastCheck)).font(.caption).foregroundStyle(.secondary).padding(.top, 12)
             if model.audit.isEmpty {
@@ -222,6 +227,7 @@ struct Dashboard: View {
                     Text(L("Checks start below 10% or 25 GiB free. Eligible checkouts are at least seven days old and have no detected open files.")).font(.callout)
                 }
             }
+            Button(L("Agent storage")) { navigation.show(.storage) }
             Button(L("Inspect worktrees…")) { navigation.show(.worktrees) }
         }
     }

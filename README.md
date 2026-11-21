@@ -34,17 +34,18 @@ Optional cache cleanup covers exactly `.next/cache` and `node_modules/.cache` in
 ## Inspect a workload
 
 - **Processes** shows processes owned by the current user, sortable by RSS and CPU. Locate displays a PID's current working directory. Executable names and parent PIDs associate descendants with Codex, Claude Code or Docker Desktop. Shared pages can be counted more than once in summed RSS. Detached children and renamed wrappers may remain unattributed. Several conversations may share one host process.
-- **Disk** accepts a repository or linked checkout, lists its registered Git worktrees and shows branch, detached, locked and prunable indicators. Inspect checks tracked and untracked changes and measures allocated directory size. Reveal opens Finder. Agent session and worktree folders can be measured separately. A clean Git status can still contain ignored files, unpublished commits and valuable build products. APFS clones and shared blocks affect the space actually reclaimable.
+- **Disk** accepts a repository or linked checkout, lists its registered Git worktrees and shows branch, detached, locked and prunable indicators. Inspect checks tracked and untracked changes and measures allocated directory size. Reveal opens Finder. **Agent storage** inventories allocated space in detected CLI, desktop, XDG and editor-extension stores, including Claude Code, Codex, OpenCode, Gemini CLI, Cursor, GitHub Copilot, Hermes and Grok. It probes tool folders in repositories under common development locations and follows Git's registered worktrees. The configured repository and extra CLI repository arguments are also probed. Directories under custom harness installations can be included with **Add folder**. The scanner respects absolute environment overrides visible to the app (including `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the XDG base directories). A Finder-launched app can have a different environment from a shell. Resolved duplicates and nested roots are counted once under the outer store. Scanning examines filesystem metadata and grants no cleanup permissions. A clean Git status can still contain ignored files, unpublished commits and valuable build products. APFS clones and shared blocks affect the space actually reclaimable.
 - **Containers** queries a local Unix socket on request and during the battery policy. Socket discovery uses Docker Desktop, default Colima, OrbStack, then the system socket, in that order. A stopped or inaccessible engine can leave a socket on disk. The app does not launch it. Stop asks for confirmation and targets the full container ID at the inspected socket.
 - **Power** follows macOS power-source events. The menu bar icon changes on battery. The overview shows the current power source. CPU, RSS and power-source readings do not measure per-process watts.
 
-Process snapshots refresh when opening the dashboard and on request. Disk scans run one at a time with a 90-second timeout. Rules, enrolled targets and activity history are saved in local app preferences. No analytics, transcripts or remote services are used.
+Process snapshots refresh when opening the dashboard and on request. Manual folder measurements have a 90-second timeout. The harness inventory runs once per day when background rules are enabled and AC power is detected, or when opened with stale data. Refresh forces a scan. It measures roots sequentially with a five-minute budget per root and marks failed measurements as unavailable. Cached inventory stays in local app preferences. Rules, enrolled targets and activity history are saved in local app preferences. No analytics, transcripts or remote services are used.
 
 ## Terminal
 
 ```sh
 bin=.build/DevLoadBar.app/Contents/MacOS/DevLoadBar
 "$bin" --snapshot
+"$bin" --harness-storage
 "$bin" --worktrees /path/to/repository
 "$bin" --containers
 ```

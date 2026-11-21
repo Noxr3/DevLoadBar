@@ -17,6 +17,8 @@ import ServiceManagement
     @Published var audit = UserDefaults.standard.stringArray(forKey: "managementAudit") ?? []
     @Published var lastCheck = "Waiting for first check"
     @Published var loginEnabled = SMAppService.mainApp.status == .enabled
+    let inventory = StorageInventory()
+    var scanRepositories: [String] { [repo, rules.repository] }
     let runner = PolicyRunner()
     var policyTask: Task<Void, Never>?
     var timer: Timer?
@@ -30,6 +32,7 @@ import ServiceManagement
     }
     func checkRules() {
         guard policyTask == nil else { return }
+        if rules.enabled && batteryPower() == false { inventory.scan(repositories: scanRepositories) }
         let policy = rules
         policyTask = Task {
             let events = await runner.tick(policy)
@@ -224,6 +227,12 @@ import ServiceManagement
         let args = CommandLine.arguments
         if args.count > 1 {
             switch args[1] {
+            case "--harness-storage":
+                let roots = HarnessStorage().discover(repositories: Array(args.dropFirst(2)), extra: UserDefaults.standard.stringArray(forKey: "additionalHarnessRoots") ?? [])
+                for root in roots {
+                    let row = HarnessStorage.measure(root)
+                    print(root.tool, row.bytes.map(gib) ?? "Unavailable", root.path, separator: "\t")
+                }
             case "--snapshot":
                 let snap = try Snapshot()
                 print("\(snap.power) | swap \(snap.swap) | disk free \(snap.disk)")
@@ -237,7 +246,7 @@ import ServiceManagement
                 let rows = try e.containers()
                 print("\(rows.count) running containers")
                 for c in rows { print(c.name, c.status) }
-            default: throw Failure("Expected --snapshot, --worktrees PATH or --containers")
+            default: throw Failure("Expected --snapshot, --harness-storage [REPO ...], --worktrees PATH or --containers")
             }
             return
         }
